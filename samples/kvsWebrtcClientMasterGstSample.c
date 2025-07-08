@@ -8,7 +8,7 @@ extern PSampleConfiguration gSampleConfiguration;
 GstElement* senderPipeline = NULL;
 
 // int switch_locker = 0;
-const gchar* curr_uri = "file:///home/adham/Desktop/kinesis/python-samples-for-amazon-kinesis-video-streams-with-webrtc/_assets/example.mp4";
+const gchar* curr_uri = "rtsp://admin:gl123456@192.168.0.76:554/Streaming/Channels/1602";
 int changing_state = 0;
 
 GstFlowReturn on_new_sample(GstElement* sink, gpointer data, UINT64 trackid)
@@ -242,7 +242,7 @@ PVOID sendGstreamerAudioVideo(PVOID args)
                                     "x264enc name=sampleVideoEncoder bframes=0 speed-preset=veryfast bitrate=512 byte-stream=TRUE tune=zerolatency ! "
                                     "video/x-h264,stream-format=byte-stream,alignment=au,profile=baseline ! queue ! "
                                     "appsink sync=TRUE emit-signals=TRUE name=appsink-video ",
-                                    pSampleConfiguration->rtspUri);
+                                    curr_uri);
 
                         if (stringOutcome > RTSP_PIPELINE_MAX_CHAR_COUNT) {
                             DLOGE("[KVS GStreamer Master] ERROR: rtsp uri entered exceeds maximum allowed length set by RTSP_PIPELINE_MAX_CHAR_COUNT");
@@ -308,7 +308,7 @@ PVOID sendGstreamerAudioVideo(PVOID args)
                                     "src. ! audioconvert ! "
                                     "audioresample ! opusenc name=sampleAudioEncoder ! audio/x-opus,rate=48000,channels=2 ! queue ! "
                                     "appsink sync=TRUE emit-signals=TRUE name=appsink-audio",
-                                    pSampleConfiguration->rtspUri);
+                                    curr_uri);
 
                         if (stringOutcome > RTSP_PIPELINE_MAX_CHAR_COUNT) {
                             DLOGE("[KVS GStreamer Master] ERROR: rtsp uri entered exceeds maximum allowed length set by RTSP_PIPELINE_MAX_CHAR_COUNT");
@@ -402,8 +402,8 @@ void change_uri(const gchar* new_uri) {
 
 void* filesrc_switcher_thread(void* arg) {
     const gchar* files[] = {
-        "file:///home/adham/Desktop/kinesis/python-samples-for-amazon-kinesis-video-streams-with-webrtc/_assets/example.mp4",
-        "file:///home/adham/Desktop/kinesis/python-samples-for-amazon-kinesis-video-streams-with-webrtc/_assets/example2.mp4",
+        "rtsp://admin:gl123456@192.168.0.76:554/Streaming/Channels/1602",
+        "rtsp://admin:gl123456@192.168.0.76:554/Streaming/Channels/102",
         // "file:///home/adham/Desktop/kinesis/python-samples-for-amazon-kinesis-video-streams-with-webrtc/_assets/input.mp4",
     };
     int index = 0;
