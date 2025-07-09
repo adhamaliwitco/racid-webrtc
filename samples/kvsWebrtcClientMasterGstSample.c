@@ -1,6 +1,37 @@
 #include "Samples.h"
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 7000
+#define BUFFER_SIZE 8192
+
+int extract_uri_from_json(const char *body, char *out_uri, size_t max_len) {
+    const char *key = "\"uri\"";
+    const char *start = strstr(body, key);
+    if (start) {
+        start = strchr(start, ':');
+        if (!start) return 0;
+        start++; // skip ':'
+        while (*start == ' ' || *start == '\"') start++; // skip space/quote
+
+        const char *end = strchr(start, '\"');
+        if (!end) return 0;
+
+        size_t len = end - start;
+        if (len >= max_len) return 0;
+
+        snprintf(out_uri, max_len, "%.*s", (int)len, start);
+        return 1;
+    }
+    return 0;
+}
+
+
 
 extern PSampleConfiguration gSampleConfiguration;
 // #define VERBOSE
@@ -8,6 +39,7 @@ extern PSampleConfiguration gSampleConfiguration;
 GstElement* senderPipeline = NULL;
 
 // int switch_locker = 0;
+// const gchar* curr_uri = "file:///home/adham/Desktop/kinesis/python-samples-for-amazon-kinesis-video-streams-with-webrtc/_assets/input.mp4";
 const gchar* curr_uri = "rtsp://admin:gl123456@192.168.0.76:554/Streaming/Channels/1602";
 int changing_state = 0;
 
@@ -399,24 +431,144 @@ void change_uri(const gchar* new_uri) {
 }
 
 
+void handle_client(int client_socket) {
+    char buffer[BUFFER_SIZE];
+    int bytes_read = read(client_socket, buffer, BUFFER_SIZE - 1);
+    if (bytes_read <= 0) {
+        perror("read");
+        close(client_socket);
+        return;
+    }
+
+    buffer[bytes_read] = '\0';
+
+    // Accept any PATCH method
+    if (strncmp(buffer, "PATCH", 5) == 0) {
+        char *body = strstr(buffer, "\r\n\r\n");
+        if (body) {
+            body += 4;
+            char uri[1024];
+            int ok = extract_uri_from_json(body, uri, sizeof(uri));
+            if (ok) {
+                printf("Extracted URI: %s\n", uri);
+                change_uri(uri);
+
+                char json_response[2048];
+                snprintf(json_response, sizeof(json_response),
+                         "{ \"status\": \"ok\", \"uri\": \"%s\" }\n", uri);
+
+                char header[256];
+                snprintf(header, sizeof(header),
+                         "HTTP/1.1 200 OK\r\n"
+                         "Content-Type: application/json\r\n"
+                         "Content-Length: %zu\r\n"
+                         "Connection: close\r\n"
+                         "\r\n", strlen(json_response));
+
+                write(client_socket, header, strlen(header));
+                write(client_socket, json_response, strlen(json_response));
+            } else {
+                const char *json_response = "{ \"status\": \"error\", \"message\": \"URI parse failed\" }\n";
+
+                char header[256];
+                snprintf(header, sizeof(header),
+                         "HTTP/1.1 500 Internal Server Error\r\n"
+                         "Content-Type: application/json\r\n"
+                         "Content-Length: %zu\r\n"
+                         "Connection: close\r\n"
+                         "\r\n", strlen(json_response));
+
+                write(client_socket, header, strlen(header));
+                write(client_socket, json_response, strlen(json_response));
+            }
+        } else {
+            const char *json_response = "{ \"status\": \"error\", \"message\": \"Missing body\" }\n";
+
+            char header[256];
+            snprintf(header, sizeof(header),
+                     "HTTP/1.1 500 Internal Server Error\r\n"
+                     "Content-Type: application/json\r\n"
+                     "Content-Length: %zu\r\n"
+                     "Connection: close\r\n"
+                     "\r\n", strlen(json_response));
+
+            write(client_socket, header, strlen(header));
+            write(client_socket, json_response, strlen(json_response));
+        }
+    } else {
+        const char *json_response = "{ \"status\": \"error\", \"message\": \"Method not allowed\" }\n";
+
+        char header[256];
+        snprintf(header, sizeof(header),
+                 "HTTP/1.1 405 Method Not Allowed\r\n"
+                 "Content-Type: application/json\r\n"
+                 "Content-Length: %zu\r\n"
+                 "Connection: close\r\n"
+                 "\r\n", strlen(json_response));
+
+        write(client_socket, header, strlen(header));
+        write(client_socket, json_response, strlen(json_response));
+    }
+
+    close(client_socket);
+}
+
+
+int server() {
+    int server_fd, client_socket;
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == 0) {
+        perror("socket failed");
+        exit(EXIT_FAILURE);
+    }
+
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(PORT);
+
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("bind failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(server_fd, 3) < 0) {
+        perror("listen");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server listening on port %d...\n", PORT);
+
+    while (1) {
+        client_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t *)&addrlen);
+        if (client_socket < 0) {
+            perror("accept");
+            continue;
+        }
+
+        handle_client(client_socket);
+    }
+
+    return 0;
+}
 
 void* filesrc_switcher_thread(void* arg) {
-    const gchar* files[] = {
-        "rtsp://admin:gl123456@192.168.0.76:554/Streaming/Channels/1602",
-        "rtsp://admin:gl123456@192.168.0.76:554/Streaming/Channels/102",
-        // "file:///home/adham/Desktop/kinesis/python-samples-for-amazon-kinesis-video-streams-with-webrtc/_assets/input.mp4",
-    };
-    int index = 0;
-    int fileCount = 2;
+    // const gchar* files[] = {
+    //     "rtsp://admin:gl123456@192.168.0.76:554/Streaming/Channels/1602",
+    //     "rtsp://admin:gl123456@192.168.0.76:554/Streaming/Channels/102",
+    // };
+    // int index = 0;
+    // int fileCount = 2;
 
     while (!ATOMIC_LOAD_BOOL(&gSampleConfiguration->appTerminateFlag)) {
-        // sleep(10); // Wait 10 seconds
-        int i = 0;
-        sleep(10);
-        // You can also use a mutex if needed to protect senderPipeline
-        change_uri(files[index]);
-        index = (index + 1) % fileCount;
-        printf("Change index to %d, file: %s\n", index, files[index]);
+        server();
     }
 
     return NULL;
